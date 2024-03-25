@@ -54,24 +54,26 @@
             using (SourceCacheContext cacheContext = new SourceCacheContext { NoCache = true })
             {
                 MyLogger log = new MyLogger();
-                CancellationTokenSource tokenSource = new CancellationTokenSource();
-
-                // get all versions from source
-                var allSourceVersions = await sourceSearch.GetAllVersionsAsync(packageName, cacheContext, log, tokenSource.Token);
-
-                // get all versions from target
-                var allTargetVersions = await targetSearch.GetAllVersionsAsync(packageName, cacheContext, log, tokenSource.Token);
-
-                // Filter the unknown versions
-                var unknownVersions = allSourceVersions.Except(allTargetVersions).ToList();
-
-                if (includePrerelease)
+                using (CancellationTokenSource tokenSource = new CancellationTokenSource())
                 {
-                    return unknownVersions;
-                }
-                else
-                {
-                    return unknownVersions.Where(p => !p.IsPrerelease).ToArray();
+
+                    // get all versions from source
+                    var allSourceVersions = await sourceSearch.GetAllVersionsAsync(packageName, cacheContext, log, tokenSource.Token);
+
+                    // get all versions from target
+                    var allTargetVersions = await targetSearch.GetAllVersionsAsync(packageName, cacheContext, log, tokenSource.Token);
+
+                    // Filter the unknown versions
+                    var unknownVersions = allSourceVersions.Except(allTargetVersions).ToList();
+
+                    if (includePrerelease)
+                    {
+                        return unknownVersions;
+                    }
+                    else
+                    {
+                        return unknownVersions.Where(p => !p.IsPrerelease).ToArray();
+                    }
                 }
             }
         }
@@ -90,42 +92,43 @@
             using (SourceCacheContext cacheContext = new SourceCacheContext { NoCache = true })
             {
                 MyLogger log = new MyLogger();
-                CancellationTokenSource tokenSource = new CancellationTokenSource();
-
-                List<string> packageFilePaths = new List<string>();
-
-                try
+                using (CancellationTokenSource tokenSource = new CancellationTokenSource())
                 {
-                    foreach (var version in versions)
+                    List<string> packageFilePaths = new List<string>();
+
+                    try
                     {
-                        PackageIdentity id = new PackageIdentity(packageName, version);
-
-                        var downloader = await sourceSearch.GetPackageDownloaderAsync(id, cacheContext, log, tokenSource.Token);
-
-                        if (downloader == null)
+                        foreach (var version in versions)
                         {
-                            throw new InvalidOperationException($"Could not download package {packageName} with version {version}");
+                            PackageIdentity id = new PackageIdentity(packageName, version);
+
+                            var downloader = await sourceSearch.GetPackageDownloaderAsync(id, cacheContext, log, tokenSource.Token);
+
+                            if (downloader == null)
+                            {
+                                throw new InvalidOperationException($"Could not download package {packageName} with version {version}");
+                            }
+
+                            string timeFileName = Path.GetRandomFileName();
+
+                            if (await downloader.CopyNupkgFileToAsync(timeFileName, tokenSource.Token))
+                            {
+                                packageFilePaths.Add(timeFileName);
+                            }
+                            else
+                            {
+                                Console.WriteLine($"Failed to download: {packageName} with version {version}");
+                            }
                         }
 
-                        string timeFileName = Path.GetRandomFileName();
-
-                        if (await downloader.CopyNupkgFileToAsync(timeFileName, tokenSource.Token))
-                        {
-                            packageFilePaths.Add(timeFileName);
-                        }
-                        else
-                        {
-                            Console.WriteLine($"Failed to download: {packageName} with version {version}");
-                        }
+                        await targetPush.Push(packageFilePaths, null, 5 * 60, false, _ => targetApiKey, _ => null, false, false, null, log);
                     }
-
-                    await targetPush.Push(packageFilePaths, null, 5 * 60, false, _ => targetApiKey, _ => null, false, false, null, log);
-                }
-                finally
-                {
-                    foreach (var file in packageFilePaths)
+                    finally
                     {
-                        File.Delete(file);
+                        foreach (var file in packageFilePaths)
+                        {
+                            File.Delete(file);
+                        }
                     }
                 }
             }
