@@ -9,7 +9,7 @@
 
     using Skyline.DataMiner.CICD.Tools.SyncNuGets;
 
-    [TestClass]
+    [TestClass, Ignore("Can only run on local machine")]
     public class NuGetAccessIntegrationTests
     {
         private IConfiguration Configuration { get; set; }
