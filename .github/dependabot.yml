@@ -8,4 +8,7 @@ updates:
   - package-ecosystem: "nuget" # See documentation for possible values
     directory: "/" # Location of package manifests
     schedule:
-      interval: "weekly"
+      interval: "daily"
+    ignore:
+      - dependency-name: "FluentAssertions"
+        versions: [ ">=8.0.0" ]
