@@ -2,11 +2,13 @@
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.IO;
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
 
+    using NuGet.Common;
     using NuGet.Configuration;
     using NuGet.Packaging.Core;
     using NuGet.Protocol;
@@ -131,6 +133,61 @@
                         }
                     }
                 }
+            }
+        }
+
+        public async Task<List<string>> FindAllKnownPackageNames()
+        {
+            // Get the SearchAutocompleteResource from the source repository.
+            var packageSearchResource = await sourceRepository.GetResourceAsync<PackageSearchResource>();
+
+            int skip = 0;
+            const int take = 100; // page size
+            bool moreResults = true;
+            List<string> packageIds = new List<string>();
+            Stopwatch maxLoop = new Stopwatch();
+            maxLoop.Start();
+            MyLogger logger = new MyLogger();
+            SearchFilter searchFilter = new SearchFilter(includePrerelease: true);
+
+            using (CancellationTokenSource tokenSource = new CancellationTokenSource())
+            {
+                TimeSpan maxTime = new(0, 2, 0);
+                while (moreResults && maxLoop.Elapsed < maxTime)
+                {
+                    // An empty search query "" to match all packages.
+                    var packages = await packageSearchResource.SearchAsync(
+                    "",
+                    searchFilter,
+                    skip: skip,
+                    take: take,
+                    NullLogger.Instance,
+                    CancellationToken.None);
+
+                    // If no more packages are returned, stop paging.
+                    if (packages == null || !packages.Any())
+                    {
+                        moreResults = false;
+                        break;
+                    }
+
+                    // Print out each package ID
+                    foreach (var package in packages)
+                    {
+                        packageIds.Add(package.Identity.Id);
+                    }
+
+                    skip += take;
+                }
+
+                if (maxLoop.Elapsed >= maxTime)
+                {
+                    throw new InvalidOperationException($"Exceeded Maximum Loop Time {maxTime} for requesting package id's from source. Loop-Safety triggered.");
+                }
+
+                maxLoop.Stop();
+                // Remove duplicates (if any) and return.
+                return packageIds.Distinct().ToList();
             }
         }
     }

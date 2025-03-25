@@ -26,7 +26,7 @@
 
             Configuration = builder.Build();
         }
-        
+
         [TestMethod, Ignore("This test can only run once, use it wisely. After that alpha3 will exist and can't be added again. There is no way to make a valid re-usable integration test without first uploading new versions.")]
         public async Task PushMissingNugetAsyncTest()
         {
@@ -87,5 +87,21 @@
 
             results.Should().BeEquivalentTo(expectedResults);
         }
+
+        [TestMethod]
+        public async Task ListAllKnownNuGets()
+        {
+            string sourceRepo = "https://devcore3/nuget";
+            string targetRepo = "https://pkgs.dev.azure.com/skyline-cloud/_packaging/skyline-private-nugets/nuget/v3/index.json";
+
+            string sourceApi = Configuration["SyncNuGetTestsSouceToken"];
+            string targetApi = Configuration["SyncNuGetTestsTargetToken"];
+
+            var syncer = new NuGetSyncer(sourceRepo, targetRepo, sourceApi, targetApi);
+            var results = await syncer.FindAllKnownPackageNames();
+
+            results.Should().NotBeEmpty();
+        }
+
     }
 }
