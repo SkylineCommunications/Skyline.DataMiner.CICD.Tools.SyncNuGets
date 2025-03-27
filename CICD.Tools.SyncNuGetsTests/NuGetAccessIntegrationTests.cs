@@ -1,5 +1,9 @@
 ﻿namespace CICD.Tools.SyncNuGetsTests
 {
+    using System;
+    using System.Diagnostics;
+    using System.Xml.Linq;
+
     using FluentAssertions;
 
     using Microsoft.Extensions.Configuration;
@@ -98,10 +102,70 @@
             string targetApi = Configuration["SyncNuGetTestsTargetToken"];
 
             var syncer = new NuGetSyncer(sourceRepo, targetRepo, sourceApi, targetApi);
-            var results = await syncer.FindAllKnownPackageNames();
+            var results = await syncer.FindAllKnownPackageNames(true);
 
             results.Should().NotBeEmpty();
         }
 
+        [TestMethod]
+        public async Task CountNuGets()
+        {
+            string countRepo1 = "https://pkgs.dev.azure.com/skyline-cloud/_packaging/skyline-private-nugets/nuget/v3/index.json";
+            string countRepo2 = "https://devcore3/nuget";
+
+            string countRepo1Api = Configuration["SyncNuGetTestsTargetToken"];
+            string countRepo2Api = Configuration["SyncNuGetTestsSourceToken"];
+            string unusedApi = String.Empty;
+
+            var syncer1 = new NuGetSyncer(countRepo1, String.Empty, countRepo1Api, unusedApi);
+            var results1 = await syncer1.FindAllKnownPackageNames(true);
+
+            var syncer2 = new NuGetSyncer(countRepo2, String.Empty, countRepo2Api, unusedApi);
+            var results2 = await syncer2.FindAllKnownPackageNames(true);
+
+            var unSyncedItems = results2.Except(results1).ToList();
+        }
+
+        [TestMethod, Ignore("This is used to manually perform a complete sync but keep track of the execution.")]
+        public async Task PerformActualSync()
+        {
+            string sourceRepo = "https://devcore3/nuget";
+            string targetRepo = "https://pkgs.dev.azure.com/skyline-cloud/_packaging/skyline-private-nugets/nuget/v3/index.json";
+
+            string sourceApi = "";// Configuration["SyncNuGetTestsSouceToken"];
+            string targetApi = Configuration["SyncNuGetTestsTargetToken"];
+            bool success = false;
+            string lastException = "";
+            for (int i = 0; i < 500; i++)
+            {
+                if (success) break;
+                try
+                {
+                    var syncer = new NuGetSyncer(sourceRepo, targetRepo, sourceApi, targetApi);
+                    var results = await syncer.FindAllKnownPackageNames(true);
+
+                    results.Should().NotBeEmpty();
+
+                    foreach (var toSync in results)
+                    {
+                        var missingVersions = await syncer.FindMissingNuGetsAsync(toSync, true);
+
+                        if (missingVersions != null && missingVersions.Any())
+                        {
+                            await syncer.PushMissingNuGetsAsync(toSync, missingVersions.ToArray());
+                        }
+                    }
+
+                    success = true;
+                }
+                catch (Exception ex)
+                {
+                    lastException = ex.ToString();
+                    Thread.Sleep(10000);
+                }
+            }
+
+            if (!success) throw new InvalidOperationException(lastException);
+        }
     }
 }

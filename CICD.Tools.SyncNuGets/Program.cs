@@ -92,7 +92,7 @@
                 List<string> packageNames;
                 if (packageName.Equals("*", StringComparison.InvariantCultureIgnoreCase))
                 {
-                    packageNames = await syncer.FindAllKnownPackageNames();
+                    packageNames = await syncer.FindAllKnownPackageNames(includePrereleases);
                 }
                 else
                 {
