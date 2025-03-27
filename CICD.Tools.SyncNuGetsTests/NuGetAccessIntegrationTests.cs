@@ -107,25 +107,6 @@
             results.Should().NotBeEmpty();
         }
 
-        [TestMethod]
-        public async Task CountNuGets()
-        {
-            string countRepo1 = "https://pkgs.dev.azure.com/skyline-cloud/_packaging/skyline-private-nugets/nuget/v3/index.json";
-            string countRepo2 = "https://devcore3/nuget";
-
-            string countRepo1Api = Configuration["SyncNuGetTestsTargetToken"];
-            string countRepo2Api = Configuration["SyncNuGetTestsSourceToken"];
-            string unusedApi = String.Empty;
-
-            var syncer1 = new NuGetSyncer(countRepo1, String.Empty, countRepo1Api, unusedApi);
-            var results1 = await syncer1.FindAllKnownPackageNames(true);
-
-            var syncer2 = new NuGetSyncer(countRepo2, String.Empty, countRepo2Api, unusedApi);
-            var results2 = await syncer2.FindAllKnownPackageNames(true);
-
-            var unSyncedItems = results2.Except(results1).ToList();
-        }
-
         [TestMethod, Ignore("This is used to manually perform a complete sync but keep track of the execution.")]
         public async Task PerformActualSync()
         {
