@@ -8,8 +8,7 @@
     <Nullable>disable</Nullable>
     <AssemblyName>Skyline.DataMiner.CICD.Tools.SyncNuGets</AssemblyName>
     <RootNamespace>Skyline.DataMiner.CICD.Tools.SyncNuGets</RootNamespace>
-    <PackageVersion>1.0.1</PackageVersion>
-    <Version>1.0.1</Version>
+    <Version>2.0.1-beta1</Version>
     <PackageTags>Skyline;DataMiner;CICD</PackageTags>
     <PackageProjectUrl>https://skyline.be</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>

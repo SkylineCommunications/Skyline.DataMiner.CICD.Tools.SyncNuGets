@@ -2,11 +2,14 @@
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.IO;
     using System.Linq;
+    using System.Text.RegularExpressions;
     using System.Threading;
     using System.Threading.Tasks;
 
+    using NuGet.Common;
     using NuGet.Configuration;
     using NuGet.Packaging.Core;
     using NuGet.Protocol;
@@ -34,7 +37,11 @@
             this.targetApiKey = targetApiKey;
             PackageSource source = new PackageSource(sourceStore);
             PackageSource target = new PackageSource(targetStore);
-            source.Credentials = new PackageSourceCredential(sourceStore, "az", sourceApiKey, true, null);
+            if (String.IsNullOrWhiteSpace(sourceApiKey))
+            {
+                source.Credentials = new PackageSourceCredential(sourceStore, "az", sourceApiKey, true, null);
+            }
+
             target.Credentials = new PackageSourceCredential(targetStore, "az", targetApiKey, true, null);
 
             sourceRepository = Repository.Factory.GetCoreV3(source);
@@ -95,7 +102,7 @@
                 using (CancellationTokenSource tokenSource = new CancellationTokenSource())
                 {
                     List<string> packageFilePaths = new List<string>();
-
+                    List<string> originalVersions = new List<string>();
                     try
                     {
                         foreach (var version in versions)
@@ -114,6 +121,7 @@
                             if (await downloader.CopyNupkgFileToAsync(timeFileName, tokenSource.Token))
                             {
                                 packageFilePaths.Add(timeFileName);
+                                originalVersions.Add(version.ToString());
                             }
                             else
                             {
@@ -121,7 +129,41 @@
                             }
                         }
 
-                        await targetPush.Push(packageFilePaths, null, 5 * 60, false, _ => targetApiKey, _ => null, false, false, null, log);
+                        bool success = false;
+                        Stopwatch maxLoop = new Stopwatch();
+                        maxLoop.Start();
+                        while (!success && maxLoop.Elapsed < new TimeSpan(0, 5, 0))
+                        {
+                            try
+                            {
+                                await targetPush.Push(packageFilePaths, null, 5 * 60, false, _ => targetApiKey, _ => null, false, false, null, log);
+                            }
+                            catch (Exception ex)
+                            {
+                                string exString = ex.ToString();
+                                if (ex.ToString().Contains("409"))
+                                {
+                                    var regex = new Regex(@"\b\d+\.\d+\.\d+(?:-[\w\d]+)?\b");
+                                    var match = regex.Match(exString);
+                                    if (match.Success)
+                                    {
+                                        int found = originalVersions.IndexOf(match.Value);
+                                        var pathToRemove = packageFilePaths[found];
+                                        File.Delete(pathToRemove);
+                                        packageFilePaths.RemoveAt(found);
+                                        originalVersions.RemoveAt(found);
+                                        Console.WriteLine($"Skipping Previous Deleted version: {match.Value}");
+                                        continue;
+                                    }
+                                }
+
+                                throw;
+                            }
+
+                            success = true;
+                        }
+
+                        maxLoop.Stop();
                     }
                     finally
                     {
@@ -131,6 +173,61 @@
                         }
                     }
                 }
+            }
+        }
+
+        public async Task<List<string>> FindAllKnownPackageNames(bool includePrereleases)
+        {
+            // Get the SearchAutocompleteResource from the source repository.
+            var packageSearchResource = await sourceRepository.GetResourceAsync<PackageSearchResource>();
+
+            int skip = 0;
+            const int take = 100; // page size
+            bool moreResults = true;
+            List<string> packageIds = new List<string>();
+            Stopwatch maxLoop = new Stopwatch();
+            maxLoop.Start();
+            MyLogger logger = new MyLogger();
+            SearchFilter searchFilter = new SearchFilter(includePrerelease: includePrereleases);
+
+            using (CancellationTokenSource tokenSource = new CancellationTokenSource())
+            {
+                TimeSpan maxTime = new(0, 2, 0);
+                while (moreResults && maxLoop.Elapsed < maxTime)
+                {
+                    // An empty search query "" to match all packages.
+                    var packages = await packageSearchResource.SearchAsync(
+                    "",
+                    searchFilter,
+                    skip: skip,
+                    take: take,
+                    NullLogger.Instance,
+                    CancellationToken.None);
+
+                    // If no more packages are returned, stop paging.
+                    if (packages == null || !packages.Any())
+                    {
+                        moreResults = false;
+                        break;
+                    }
+
+                    // Print out each package ID
+                    foreach (var package in packages)
+                    {
+                        packageIds.Add(package.Identity.Id);
+                    }
+
+                    skip += take;
+                }
+
+                if (maxLoop.Elapsed >= maxTime)
+                {
+                    throw new InvalidOperationException($"Exceeded Maximum Loop Time {maxTime} for requesting package id's from source. Loop-Safety triggered.");
+                }
+
+                maxLoop.Stop();
+                // Remove duplicates (if any) and return.
+                return packageIds.Distinct().ToList();
             }
         }
     }
