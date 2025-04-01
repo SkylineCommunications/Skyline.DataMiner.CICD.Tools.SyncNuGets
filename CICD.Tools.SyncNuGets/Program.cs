@@ -1,6 +1,7 @@
 ﻿namespace Skyline.DataMiner.CICD.Tools.SyncNuGets
 {
     using System;
+    using System.Collections.Generic;
     using System.CommandLine;
     using System.Linq;
     using System.Threading.Tasks;
@@ -23,10 +24,12 @@
         {
             var packageName = new Option<string>(
                 name: "--package-name",
-                description: "Name of the package to sync.")
+                description: "Name of the package to sync. When not provided this tool will attempt to synchronize every package from the source location.")
             {
-                IsRequired = true
+                IsRequired = false
             };
+
+            packageName.SetDefaultValue("*");
 
             var packageSource = new Option<string>(
             name: "--package-source",
@@ -85,11 +88,25 @@
             try
             {
                 NuGetSyncer syncer = new NuGetSyncer(sourceStore, targetStore, sourceApiKey, targetApiKey);
-                var missingVersions = await syncer.FindMissingNuGetsAsync(packageName, includePrereleases);
 
-                if (missingVersions != null && missingVersions.Any())
+                List<string> packageNames;
+                if (packageName.Equals("*", StringComparison.InvariantCultureIgnoreCase))
                 {
-                    await syncer.PushMissingNuGetsAsync(packageName, missingVersions.ToArray());
+                    packageNames = await syncer.FindAllKnownPackageNames(includePrereleases);
+                }
+                else
+                {
+                    packageNames = [packageName];
+                }
+
+                foreach (var name in packageNames)
+                {
+                    var missingVersions = await syncer.FindMissingNuGetsAsync(name, includePrereleases);
+
+                    if (missingVersions is { Count: > 0 })
+                    {
+                        await syncer.PushMissingNuGetsAsync(name, missingVersions.ToArray());
+                    }
                 }
 
                 return 0;

@@ -2,11 +2,14 @@
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.IO;
     using System.Linq;
+    using System.Text.RegularExpressions;
     using System.Threading;
     using System.Threading.Tasks;
 
+    using NuGet.Common;
     using NuGet.Configuration;
     using NuGet.Packaging.Core;
     using NuGet.Protocol;
@@ -34,7 +37,11 @@
             this.targetApiKey = targetApiKey;
             PackageSource source = new PackageSource(sourceStore);
             PackageSource target = new PackageSource(targetStore);
-            source.Credentials = new PackageSourceCredential(sourceStore, "az", sourceApiKey, true, null);
+            if (!String.IsNullOrWhiteSpace(sourceApiKey))
+            {
+                source.Credentials = new PackageSourceCredential(sourceStore, "az", sourceApiKey, true, null);
+            }
+
             target.Credentials = new PackageSourceCredential(targetStore, "az", targetApiKey, true, null);
 
             sourceRepository = Repository.Factory.GetCoreV3(source);
@@ -51,31 +58,26 @@
         {
             FindPackageByIdResource sourceSearch = await sourceRepository.GetResourceAsync<FindPackageByIdResource>();
             FindPackageByIdResource targetSearch = await targetRepository.GetResourceAsync<FindPackageByIdResource>();
-            using (SourceCacheContext cacheContext = new SourceCacheContext { NoCache = true })
+            MyLogger log = new MyLogger();
+
+            using SourceCacheContext cacheContext = new SourceCacheContext { NoCache = true };
+            using CancellationTokenSource tokenSource = new CancellationTokenSource();
+
+            // get all versions from source
+            var allSourceVersions = await sourceSearch.GetAllVersionsAsync(packageName, cacheContext, log, tokenSource.Token);
+
+            // get all versions from target
+            var allTargetVersions = await targetSearch.GetAllVersionsAsync(packageName, cacheContext, log, tokenSource.Token);
+
+            // Filter the unknown versions
+            var unknownVersions = allSourceVersions.Except(allTargetVersions).ToList();
+
+            if (includePrerelease)
             {
-                MyLogger log = new MyLogger();
-                using (CancellationTokenSource tokenSource = new CancellationTokenSource())
-                {
-
-                    // get all versions from source
-                    var allSourceVersions = await sourceSearch.GetAllVersionsAsync(packageName, cacheContext, log, tokenSource.Token);
-
-                    // get all versions from target
-                    var allTargetVersions = await targetSearch.GetAllVersionsAsync(packageName, cacheContext, log, tokenSource.Token);
-
-                    // Filter the unknown versions
-                    var unknownVersions = allSourceVersions.Except(allTargetVersions).ToList();
-
-                    if (includePrerelease)
-                    {
-                        return unknownVersions;
-                    }
-                    else
-                    {
-                        return unknownVersions.Where(p => !p.IsPrerelease).ToArray();
-                    }
-                }
+                return unknownVersions;
             }
+
+            return unknownVersions.Where(p => !p.IsPrerelease).ToArray();
         }
 
         /// <summary>
@@ -89,49 +91,127 @@
             var sourceSearch = await sourceRepository.GetResourceAsync<FindPackageByIdResource>();
             var targetPush = await targetRepository.GetResourceAsync<PackageUpdateResource>();
 
-            using (SourceCacheContext cacheContext = new SourceCacheContext { NoCache = true })
+            MyLogger log = new MyLogger();
+            using SourceCacheContext cacheContext = new SourceCacheContext { NoCache = true };
+            using CancellationTokenSource tokenSource = new CancellationTokenSource();
+
+            List<string> packageFilePaths = new List<string>();
+            List<string> originalVersions = new List<string>();
+            try
             {
-                MyLogger log = new MyLogger();
-                using (CancellationTokenSource tokenSource = new CancellationTokenSource())
+                foreach (var version in versions)
                 {
-                    List<string> packageFilePaths = new List<string>();
+                    PackageIdentity id = new PackageIdentity(packageName, version);
 
-                    try
+                    var downloader = await sourceSearch.GetPackageDownloaderAsync(id, cacheContext, log, tokenSource.Token);
+
+                    if (downloader == null)
                     {
-                        foreach (var version in versions)
-                        {
-                            PackageIdentity id = new PackageIdentity(packageName, version);
-
-                            var downloader = await sourceSearch.GetPackageDownloaderAsync(id, cacheContext, log, tokenSource.Token);
-
-                            if (downloader == null)
-                            {
-                                throw new InvalidOperationException($"Could not download package {packageName} with version {version}");
-                            }
-
-                            string timeFileName = Path.GetRandomFileName();
-
-                            if (await downloader.CopyNupkgFileToAsync(timeFileName, tokenSource.Token))
-                            {
-                                packageFilePaths.Add(timeFileName);
-                            }
-                            else
-                            {
-                                Console.WriteLine($"Failed to download: {packageName} with version {version}");
-                            }
-                        }
-
-                        await targetPush.Push(packageFilePaths, null, 5 * 60, false, _ => targetApiKey, _ => null, false, false, null, log);
+                        throw new InvalidOperationException($"Could not download package {packageName} with version {version}");
                     }
-                    finally
+
+                    string timeFileName = Path.GetRandomFileName();
+
+                    if (await downloader.CopyNupkgFileToAsync(timeFileName, tokenSource.Token))
                     {
-                        foreach (var file in packageFilePaths)
-                        {
-                            File.Delete(file);
-                        }
+                        packageFilePaths.Add(timeFileName);
+                        originalVersions.Add(version.ToString());
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Failed to download: {packageName} with version {version}");
                     }
                 }
+
+                bool success = false;
+                Stopwatch maxLoop = Stopwatch.StartNew();
+                TimeSpan timeout = TimeSpan.FromMinutes(5);
+                while (!success && maxLoop.Elapsed < timeout)
+                {
+                    try
+                    {
+                        await targetPush.Push(packageFilePaths, null, 5 * 60, false, _ => targetApiKey, _ => null, false, false, null, log);
+                    }
+                    catch (Exception ex)
+                    {
+                        string exString = ex.ToString();
+                        if (!exString.Contains("409"))
+                        {
+                            throw;
+                        }
+
+                        var regex = new Regex(@"\b\d+\.\d+\.\d+(?:-[\w\d]+)?\b");
+                        var match = regex.Match(exString);
+                        if (!match.Success)
+                        {
+                            throw;
+                        }
+
+                        int found = originalVersions.IndexOf(match.Value);
+                        var pathToRemove = packageFilePaths[found];
+                        File.Delete(pathToRemove);
+                        packageFilePaths.RemoveAt(found);
+                        originalVersions.RemoveAt(found);
+                        Console.WriteLine($"Skipping Previous Deleted version: {match.Value}");
+                        continue;
+                    }
+
+                    success = true;
+                }
+
+                maxLoop.Stop();
             }
+            finally
+            {
+                foreach (var file in packageFilePaths)
+                {
+                    File.Delete(file);
+                }
+            }
+        }
+
+        public async Task<List<string>> FindAllKnownPackageNames(bool includePrereleases)
+        {
+            // Get the SearchAutocompleteResource from the source repository.
+            var packageSearchResource = await sourceRepository.GetResourceAsync<PackageSearchResource>();
+
+            int skip = 0;
+            const int take = 100; // page size
+            List<string> packageIds = new List<string>();
+            Stopwatch maxLoop = Stopwatch.StartNew();
+            SearchFilter searchFilter = new SearchFilter(includePrerelease: includePrereleases);
+
+            TimeSpan maxTime = new(0, 2, 0);
+            while (maxLoop.Elapsed < maxTime)
+            {
+                // An empty search query "" to match all packages.
+                var packages = (await packageSearchResource.SearchAsync(
+                String.Empty,
+                searchFilter,
+                skip: skip,
+                take: take,
+                NullLogger.Instance,
+                CancellationToken.None))?.ToList();
+
+                // If no more packages are returned, stop paging.
+                if (packages == null || packages.Count == 0)
+                {
+                    break;
+                }
+
+                // Print out each package ID
+                packageIds.AddRange(packages.Select(package => package.Identity.Id));
+                skip += take;
+            }
+
+            if (maxLoop.Elapsed >= maxTime)
+            {
+                throw new InvalidOperationException($"Exceeded Maximum Loop Time {maxTime} for requesting package id's from source. Loop-Safety triggered.");
+            }
+
+            maxLoop.Stop();
+            // Remove duplicates (if any) and return.
+            return packageIds.Distinct().ToList();
         }
     }
 }
