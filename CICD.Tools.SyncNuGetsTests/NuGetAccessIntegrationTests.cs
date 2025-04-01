@@ -1,8 +1,6 @@
 ﻿namespace CICD.Tools.SyncNuGetsTests
 {
     using System;
-    using System.Diagnostics;
-    using System.Xml.Linq;
 
     using FluentAssertions;
 
@@ -131,7 +129,7 @@
                     {
                         var missingVersions = await syncer.FindMissingNuGetsAsync(toSync, true);
 
-                        if (missingVersions != null && missingVersions.Any())
+                        if (missingVersions is { Count: > 0 })
                         {
                             await syncer.PushMissingNuGetsAsync(toSync, missingVersions.ToArray());
                         }

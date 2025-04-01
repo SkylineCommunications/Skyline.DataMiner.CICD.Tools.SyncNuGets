@@ -96,14 +96,14 @@
                 }
                 else
                 {
-                    packageNames = new List<string>() { packageName };
+                    packageNames = [packageName];
                 }
 
                 foreach (var name in packageNames)
                 {
                     var missingVersions = await syncer.FindMissingNuGetsAsync(name, includePrereleases);
 
-                    if (missingVersions != null && missingVersions.Any())
+                    if (missingVersions is { Count: > 0 })
                     {
                         await syncer.PushMissingNuGetsAsync(name, missingVersions.ToArray());
                     }
